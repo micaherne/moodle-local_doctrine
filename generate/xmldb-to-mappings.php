@@ -101,15 +101,13 @@ foreach ($schema->getTables() as $table) {
 
 }
 
-// $config instanceof Doctrine\ORM\Configuration
+// Generate metadata from YAML
 $driver = new YamlDriver(array($outdir));
 
 $metadatas = array();
 $f = new DisconnectedClassMetadataFactory();
 
-
 foreach ($driver->getAllClassNames() as $c) {
-
 	$metadata = new ClassMetadata($c);
 	$driver->loadMetadataForClass($c, $metadata);
 	$metadatas[] = $metadata;
@@ -118,6 +116,8 @@ foreach ($driver->getAllClassNames() as $c) {
 $destpath = $outdir = __DIR__ . '/../temp/';
 $extend = null; // UNUSED: class to extend
 
+
+// Generate entity classes
 if (count($metadatas)) {
 	// Create EntityGenerator
 	$entityGenerator = new EntityGenerator();
@@ -152,9 +152,6 @@ $classesdir = $CFG->dirroot.'/local/doctrine/classes';
 rmdir($classesdir);
 rename($destpath . '/local_doctrine', $classesdir);
 
-// Use Doctrine\ORM\Tools\EntityGenerator to generate entities
-// See Doctrine\ORM\Tools\Console\Command\GenerateEntitiesCommand
-
 function field_definition(xmldb_field $field) {
 	$result = array();
 	$options = array();
@@ -163,6 +160,7 @@ function field_definition(xmldb_field $field) {
 		$result['generator'] = array('strategy' => 'auto');
 	}
 
+	// Map XMLDB type names to Doctrine ones
 	$xmldbtypename = $field->getXMLDBTypeName($field->getType());
 	$typename = $xmldbtypename;
 	switch ($xmldbtypename) {
