@@ -1,6 +1,14 @@
 <?php
 
 use Symfony\Component\Yaml\Yaml;
+
+use Doctrine\ORM\Mapping\Driver\YamlDriver;
+use Doctrine\ORM\Mapping\ClassMetadataInfo;
+use Doctrine\ORM\Tools\DisconnectedClassMetadataFactory;
+use Doctrine\ORM\Configuration;
+use Doctrine\ORM\Mapping\ClassMetadata;
+use Doctrine\ORM\Tools\EntityGenerator;
+
 define('CLI_SCRIPT', 1);
 require_once('../../../config.php');
 
@@ -14,7 +22,7 @@ $dbman = $db->get_manager();
 
 $schema = $dbman->get_install_xml_schema();
 
-$targetnamespace = 'Moodle\\Doctrine';
+$targetnamespace = 'local_doctrine';
 
 $targetnamespaceparts = explode('\\', $targetnamespace);
 $targetnamespacepartslc = array_map('lcfirst', $targetnamespaceparts);
@@ -65,27 +73,87 @@ foreach ($schema->getTables() as $table) {
 
 	$definition['id'] = array($idfield->getName() => field_definition($idfield));
 
+	$fields = array();
 	foreach ($table->getFields() as $field) {
 		if ($field->getName() == $idfield->getName()) {
 			continue;
 		}
 
-		$definition[$field->getName()] = field_definition($field);
+		// TODO: type is reserved, what do we do??
+		if ($field->getName() == 'type') {
+			// continue;
+		}
+
+		$fields[$field->getName()] = field_definition($field);
 	}
+
+	$definition['fields'] = $fields;
 
 	// Write YAML mapping file
 	$nameparts = explode('_', $tablename);
 	$namepartsuc = array_map('ucfirst', $nameparts);
-	$filename = implode(".", array_merge($targetnamespacepartslc, $nameparts)) . '.dcm.yml';
+	$filename = implode(".", array_merge($targetnamespaceparts, $namepartsuc)) . '.dcm.yml';
 	$classname = implode('\\', array_merge($targetnamespaceparts, $namepartsuc));
 	$mapping = Yaml::dump(array($classname => $definition), 6, 2);
 	$out = fopen("$outdir/$filename", "w");
 	fputs($out, $mapping);
 	fclose($out);
 
-	// Use Doctrine\ORM\Tools\EntityGenerator to generate entities
-	// See Doctrine\ORM\Tools\Console\Command\GenerateEntitiesCommand
 }
+
+// $config instanceof Doctrine\ORM\Configuration
+$driver = new YamlDriver(array($outdir));
+
+$metadatas = array();
+$f = new DisconnectedClassMetadataFactory();
+
+
+foreach ($driver->getAllClassNames() as $c) {
+
+	$metadata = new ClassMetadata($c);
+	$driver->loadMetadataForClass($c, $metadata);
+	$metadatas[] = $metadata;
+}
+
+$destpath = $outdir = __DIR__ . '/../temp/';
+$extend = null; // UNUSED: class to extend
+
+if (count($metadatas)) {
+	// Create EntityGenerator
+	$entityGenerator = new EntityGenerator();
+
+	$entityGenerator->setGenerateAnnotations(true);
+	$entityGenerator->setGenerateStubMethods(true);
+	$entityGenerator->setRegenerateEntityIfExists(true);
+	$entityGenerator->setUpdateEntityIfExists(true);
+	$entityGenerator->setNumSpaces(4);
+
+	if ($extend !== null) {
+		$entityGenerator->setClassToExtend($extend);
+	}
+
+	foreach ($metadatas as $metadata) {
+		mtrace(
+				sprintf('Processing entity "<info>%s</info>"', $metadata->name)
+		);
+	}
+
+	// Generating Entities
+	$entityGenerator->generate($metadatas, $destpath);
+
+	// Outputting information message
+	mtrace(PHP_EOL . sprintf('Entity classes generated to "<info>%s</INFO>"', $destpath));
+} else {
+	mtrace('No Metadata Classes to process.');
+}
+
+// Move to classes folder for autoloading
+$classesdir = $CFG->dirroot.'/local/doctrine/classes';
+rmdir($classesdir);
+rename($destpath . '/local_doctrine', $classesdir);
+
+// Use Doctrine\ORM\Tools\EntityGenerator to generate entities
+// See Doctrine\ORM\Tools\Console\Command\GenerateEntitiesCommand
 
 function field_definition(xmldb_field $field) {
 	$result = array();
@@ -95,7 +163,20 @@ function field_definition(xmldb_field $field) {
 		$result['generator'] = array('strategy' => 'auto');
 	}
 
-	$result['type'] = $field->getXMLDBTypeName($field->getType()); // TODO: Map type names
+	$xmldbtypename = $field->getXMLDBTypeName($field->getType());
+	$typename = $xmldbtypename;
+	switch ($xmldbtypename) {
+		case 'int':
+			$typename = 'integer';
+			break;
+		case 'number':
+			$typename = 'decimal';
+			break;
+		case 'char':
+			$typename = 'string';
+			break;
+	}
+	$result['type'] = $typename; // TODO: Map type names
 
 	// Field length is 0 for TEXT fields
 	if (!is_null($field->getLength()) && $field->getLength() > 0) {
