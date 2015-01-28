@@ -28,15 +28,16 @@ class Generator {
 
         $schema = $dbman->get_install_xml_schema();
 
-        $definitions = array();
-        $onetomanys = array();
+        $definitions = [];
+        $onetomanys = [];
+        $joinedtables = []; // tables with >1 foreign key link to another
         foreach ($schema->getTables() as $table) {
             $tablename = $table->getName();
 
-            $definitions[$table->getName()] = array("type" => "entity", "table" => "{$CFG->prefix}{$tablename}");
+            $definitions[$table->getName()] = ["type" => "entity", "table" => "{$CFG->prefix}{$tablename}"];
 
             $idkey = null;
-            $ignorefields = array();
+            $ignorefields = [];
             foreach ($table->getKeys() as $key) {
                 if ($key->getType() == XMLDB_KEY_PRIMARY) {
                     $idkey = $key;
@@ -48,10 +49,35 @@ class Generator {
                     }
 
                     $reftable = $key->getRefTable();
-                    if (!isset($onetomanys[$reftable])) {
-                        $onetomanys[$reftable] = array();
+
+                    /* We need to work out if any tables are linked to other
+                     * tables by more than one column so we can make sure we create
+                     * manyToOne and oneToMany correctly
+                     */
+                    if (!isset($joins[$tablename]) || !isset($joins[$tablename][$reftable])) {
+                    	$joins[$tablename] = [$reftable => 0];
                     }
-                    $onetomanys[$reftable][$tablename] = $key->getRefFields();
+                    $joins[$tablename][$reftable]++ ;
+
+                    // Add a many to one
+                    /* if (!isset($definitions[$table->getName()]['manyToOne'])) {
+                    	$definitions[$table->getName()]['manyToOne'] = [];
+                    }
+                    $definitions[$table->getName()]['manyToOne'][$reftable] = [
+                    	'targetEntity' => $this->classnameForTable($reftable),
+                    	'joinColumn' => [
+                    		// TODO: Support composite keys
+                    		'name' => implode('', $key->getFields()),
+                    		'referencedColumnName' => implode('', $key->getRefFields())
+                    	]
+                    ]; */
+
+                    // Take a note of inverse relationships to be added later
+                    if (!isset($onetomanys[$reftable])) {
+                        $onetomanys[$reftable] = [];
+                    }
+
+                    $onetomanys[$reftable][$tablename] = $key;
 
                 }
             }
@@ -63,13 +89,13 @@ class Generator {
 
 
             // Indexes
-            $indexes = array();
+            $indexes = [];
             foreach ($table->getKeys() as $key) {
                 if ($key->getType() == XMLDB_KEY_PRIMARY) {
                     continue; // primary key is dealt with as id
                 }
                 if ($key->getType() == XMLDB_KEY_UNIQUE) {
-                    $indexes[$key->getName()] = array('columns' => $key->getFields());
+                    $indexes[$key->getName()] = ['columns' => $key->getFields()];
                 }
             }
 
@@ -83,9 +109,9 @@ class Generator {
                 continue;
             }
 
-            $definitions[$table->getName()]['id'] = array($idfield->getName() => $this->field_definition($idfield));
+            $definitions[$table->getName()]['id'] = [$idfield->getName() => $this->field_definition($idfield)];
 
-            $fields = array();
+            $fields = [];
             foreach ($table->getFields() as $field) {
                 if ($field->getName() == $idfield->getName()) {
                     continue;
@@ -102,31 +128,35 @@ class Generator {
 
         }
 
-        // Add one-to-may relations
+        // Add one-to-many relations
         foreach ($onetomanys as $table => $details) {
-            $otm = array();
-            foreach ($details as $reftable => $reffields) {
-                $otm[$reftable] = array(
-                        'targetEntity' => self::classnameForTable($reftable),
+            $otm = [];
+
+            // Remember foreign key here has $table as $refTable etc.!!
+            foreach ($details as $tablename => $foreignkey) {
+            	$othertablefield = implode('', $foreignkey->getFields());
+            	$thistablefield = implode('', $foreignkey->getRefFields());
+            	$otm[$tablename] = [
+                        'targetEntity' => self::classnameForTable($tablename),
                         // TODO: Support composite foreign keys?
-                        'mappedBy' => implode('', $reffields)
-                );
+                        'mappedBy' => $othertablefield
+                ];
             }
             $definitions[$table]['oneToMany'] = $otm;
         }
 
         foreach ($definitions as $tablename => $definition) {
             // Write YAML mapping file
-            $mapping = Yaml::dump(array(self::classnameForTable($tablename) => $definition), 6, 2);
+            $mapping = Yaml::dump([self::classnameForTable($tablename) => $definition], 6, 2);
             $out = fopen($this->mappingsdir . DIRECTORY_SEPARATOR . self::filenameForTable($tablename), "w");
             fputs($out, $mapping);
             fclose($out);
         }
 
         // Generate metadata from YAML
-        $driver = new YamlDriver(array($this->mappingsdir));
+        $driver = new YamlDriver([$this->mappingsdir]);
 
-        $metadatas = array();
+        $metadatas = [];
         $f = new DisconnectedClassMetadataFactory();
 
         foreach ($driver->getAllClassNames() as $c) {
@@ -175,14 +205,16 @@ class Generator {
             rmdir($classesdir);
         }
         rename($destpath . '/local_doctrine/Entity', $classesdir);
+        rmdir($destpath . '/local_doctrine');
+        rmdir($destpath);
     }
 
     function field_definition(\xmldb_field $field) {
-        $result = array();
-        $options = array();
+        $result = [];
+        $options = [];
 
         if ($field->getSequence()) {
-            $result['generator'] = array('strategy' => 'auto');
+            $result['generator'] = ['strategy' => 'auto'];
         }
 
         // Map XMLDB type names to Doctrine ones
@@ -242,6 +274,25 @@ class Generator {
         }, $nameparts);
 
         return implode('\\', array_merge($targetnamespaceparts, $namepartsuc));
+    }
+
+    /**
+     * Calculate the name for a oneToMany / manyToOne join.
+     *
+     * This will normally be simply the name of the ref table, but where
+     * there is more than one link between the same table and ref table,
+     * the ref field will be appended to distinguish.
+     *
+     * @param string $table
+     * @param string $reftable
+     * @param array $joins
+     */
+    public function joinName($table, $reftable, $reffield, $joins) {
+		if ($joins[$table][$reftable] == 1) {
+			return $reftable;
+		} else {
+			return $reftable . '_where_' . $reffield;
+		}
     }
 
 }

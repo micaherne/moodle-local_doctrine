@@ -22,6 +22,11 @@ $conn = array(
 $config = Setup::createAnnotationMetadataConfiguration($paths, $isDevMode, null, null, false);
 $em = EntityManager::create($conn, $config);
 
-$user = $em->find('local_doctrine\Entity\User', 2);
+$course = $em->find('local_doctrine\Entity\Course', 3);
 
-print_r($user);
+echo $course->getFullname();
+
+$enrols = $course->getEnrol();
+foreach ($enrols as $enrol) {
+	mtrace($enrol->getId());
+}
