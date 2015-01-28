@@ -27,20 +27,40 @@ $targetnamespace = 'local_doctrine';
 $targetnamespaceparts = explode('\\', $targetnamespace);
 $targetnamespacepartslc = array_map('lcfirst', $targetnamespaceparts);
 
+$definitions = array();
+$onetomanys = array();
+$tabletoclassname = array();
+$tabletofilename = array();
 foreach ($schema->getTables() as $table) {
 	$tablename = $table->getName();
 
-	// Basic info
-	$definition = array("type" => "entity", "table" => "{$CFG->prefix}{$tablename}");
+	// Work out the filename and classname
+	// Should be functions
+	$nameparts = explode('_', $tablename);
+	$namepartsuc = array_map('ucfirst', $nameparts);
+	$tabletofilename[$tablename] = implode(".", array_merge($targetnamespaceparts, $namepartsuc)) . '.dcm.yml';
+	$tabletoclassname[$tablename] = implode('\\', array_merge($targetnamespaceparts, $namepartsuc));
+
+	$definitions[$table->getName()] = array("type" => "entity", "table" => "{$CFG->prefix}{$tablename}");
 
 	$idkey = null;
+	$ignorefields = array();
 	foreach ($table->getKeys() as $key) {
 		if ($key->getType() == XMLDB_KEY_PRIMARY) {
 			$idkey = $key;
 		}
 		if ($key->getType() == XMLDB_KEY_FOREIGN || $key->getType() == XMLDB_KEY_FOREIGN_UNIQUE) {
-			mtrace("$tablename has foreign key. Skipping for now");
-			continue 2;
+			// Don't add foreign key fields to mapping
+			foreach ($key->getFields() as $keyfield) {
+				$ignorefields[] = $keyfield;
+			}
+
+			$reftable = $key->getRefTable();
+			if (!isset($onetomanys[$reftable])) {
+				$onetomanys[$reftable] = array();
+			}
+			$onetomanys[$reftable][$tablename] = $key->getRefFields();
+
 		}
 	}
 
@@ -62,7 +82,7 @@ foreach ($schema->getTables() as $table) {
 	}
 
 	if (count($indexes) > 0) {
-		$definition['indexes'] = $indexes;
+		$definitions[$table->getName()]['indexes'] = $indexes;
 	}
 
 	$idfield = $table->getField($idkey->getFields()[0]);
@@ -71,7 +91,7 @@ foreach ($schema->getTables() as $table) {
 		continue;
 	}
 
-	$definition['id'] = array($idfield->getName() => field_definition($idfield));
+	$definitions[$table->getName()]['id'] = array($idfield->getName() => field_definition($idfield));
 
 	$fields = array();
 	foreach ($table->getFields() as $field) {
@@ -79,26 +99,38 @@ foreach ($schema->getTables() as $table) {
 			continue;
 		}
 
-		// TODO: type is reserved, what do we do??
-		if ($field->getName() == 'type') {
-			// continue;
+		if (in_array($field->getName(), $ignorefields)) {
+			continue;
 		}
 
 		$fields[$field->getName()] = field_definition($field);
 	}
 
-	$definition['fields'] = $fields;
+	$definitions[$table->getName()]['fields'] = $fields;
 
+}
+
+// Add one-to-may relations
+foreach ($onetomanys as $table => $details) {
+	$otm = array();
+	foreach ($details as $reftable => $reffields) {
+		$otm[$reftable] = array(
+			'targetEntity' => $tabletoclassname[$reftable],
+			// TODO: Support composite foreign keys?
+			'mappedBy' => implode('', $reffields)
+		);
+	}
+	$definitions[$table]['oneToMany'] = $otm;
+}
+
+foreach ($definitions as $tablename => $definition) {
+	$classname = $tabletoclassname[$tablename];
+	$filename = $tabletofilename[$tablename];
 	// Write YAML mapping file
-	$nameparts = explode('_', $tablename);
-	$namepartsuc = array_map('ucfirst', $nameparts);
-	$filename = implode(".", array_merge($targetnamespaceparts, $namepartsuc)) . '.dcm.yml';
-	$classname = implode('\\', array_merge($targetnamespaceparts, $namepartsuc));
 	$mapping = Yaml::dump(array($classname => $definition), 6, 2);
 	$out = fopen("$outdir/$filename", "w");
 	fputs($out, $mapping);
 	fclose($out);
-
 }
 
 // Generate metadata from YAML
