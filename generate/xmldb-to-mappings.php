@@ -22,7 +22,7 @@ $dbman = $db->get_manager();
 
 $schema = $dbman->get_install_xml_schema();
 
-$targetnamespace = 'local_doctrine';
+$targetnamespace = 'local_doctrine\\Entity';
 
 $targetnamespaceparts = explode('\\', $targetnamespace);
 $targetnamespacepartslc = array_map('lcfirst', $targetnamespaceparts);
@@ -145,7 +145,7 @@ foreach ($driver->getAllClassNames() as $c) {
 	$metadatas[] = $metadata;
 }
 
-$destpath = $outdir = __DIR__ . '/../temp/';
+$destpath = $outdir = __DIR__ . '/../temp';
 $extend = null; // UNUSED: class to extend
 
 
@@ -180,8 +180,10 @@ if (count($metadatas)) {
 }
 
 // Move to classes folder for autoloading
-$classesdir = $CFG->dirroot.'/local/doctrine/classes';
-rmdir($classesdir);
+$classesdir = $CFG->dirroot.'/local/doctrine/classes/Entity';
+if (file_exists($classesdir)) {
+    rmdir($classesdir);
+}
 rename($destpath . '/local_doctrine', $classesdir);
 
 function field_definition(xmldb_field $field) {
