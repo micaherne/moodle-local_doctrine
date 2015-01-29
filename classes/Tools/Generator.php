@@ -29,7 +29,7 @@ class Generator {
         $schema = $dbman->get_install_xml_schema();
 
         $definitions = [];
-        $joins = []; // tables with foreign key link to another
+        $fk = []; // tables with foreign key link to another $fk[many table][one table][fk]
         foreach ($schema->getTables() as $table) {
             $tablename = $table->getName();
 
@@ -53,27 +53,11 @@ class Generator {
                      * tables by more than one column so we can make sure we create
                      * manyToOne and oneToMany correctly
                      */
-                    if (!isset($joins[$tablename]) || !isset($joins[$tablename][$reftable])) {
-                    	$joins[$tablename] = [$reftable => [$key]];
+                    if (!isset($fk[$tablename]) || !isset($fk[$tablename][$reftable])) {
+                    	$fk[$tablename] = [$reftable => [$key]];
                     } else {
-                        $joins[$tablename][$reftable][] = $key;
+                        $fk[$tablename][$reftable][] = $key;
                     }
-
-                    // Can't add manyToOnes here as we won't know the inversedBy name yet
-
-                    // Add a many to one
-                    /* if (!isset($definitions[$table->getName()]['manyToOne'])) {
-                    	$definitions[$table->getName()]['manyToOne'] = [];
-                    }
-                    $definitions[$table->getName()]['manyToOne'][$reftable] = [
-                    	'targetEntity' => $this->classnameForTable($reftable),
-                    	'joinColumn' => [
-                    		// TODO: Support composite keys
-                    		'name' => implode('', $key->getFields()),
-                    		'referencedColumnName' => implode('', $key->getRefFields())
-                    	]
-                    ]; */
-
 
                 }
             }
@@ -124,52 +108,54 @@ class Generator {
 
         } // end of first pass
 
-        foreach ($joins as $table => $data) {
-            foreach ($data as $reftable => $keys) {
+        foreach ($fk as $manytable => $data) {
+            foreach ($data as $onetable => $keys) {
 
-            	if ($table === $reftable) {
+            	if ($manytable === $onetable) {
             		// TODO: Support self-referential joins
             		continue;
             	}
 
             	foreach ($keys as $key) {
 	                // TODO: Support composite keys?
-	                $refField = implode('', $key->getRefFields());
-	                $field = implode('', $key->getFields());
+	                $onefield = implode('', $key->getRefFields()); // usually id
+	                $manyfield = implode('', $key->getFields());
+
 	                if (count($keys) == 1) {
-	                    $manyToOneName = $table;
-	                    $oneToManyName = $reftable;
+	                    $oneToManyName = $manytable;
+	                    $manyToOneName = $onetable;
 	                } else {
-	                    $manyToOneName = "{$table}_as_" . preg_replace('/_?id$/', '', $field);
-	                    $oneToManyName = "{$reftable}_as_" . preg_replace('/_?id$/', '', $refField);
+	                    $oneToManyName = "{$manytable}_as_" . self::stripIdFromEnd($manyfield);
+	                    $manyToOneName = "{$onetable}_as_" . self::stripIdFromEnd($manyfield);
 	                }
 
 	                $otm = [
-	                    'targetEntity' => self::classnameForTable($reftable),
-	                    'mappedBy' => $field
+	                    'targetEntity' => self::classnameForTable($manytable),
+	                    'mappedBy' => $manyToOneName
 	                ];
 
-	                if (!isset($definitions[$table]['oneToMany'])) {
-	                    $definitions[$table]['oneToMany'] = [];
+	                if (!isset($definitions[$onetable]['oneToMany'])) {
+	                    $definitions[$onetable]['oneToMany'] = [];
 	                }
-	                $definitions[$table]['oneToMany'][$oneToManyName] = $otm;
+	                $definitions[$onetable]['oneToMany'][$oneToManyName] = $otm;
 
 	                $mto = [
-	                    'targetEntity' => self::classnameForTable($table),
+	                    'targetEntity' => self::classnameForTable($onetable),
 	                    'inversedBy' => $oneToManyName,
 	                    'joinColumn' => [
-	                        'name' => $refField,
-	                        'referencedColumnId' => $field
+	                        'name' => $manyfield,
+	                        'referencedColumnId' => $onefield
 	                    ]
 	                ];
 
-	                if (!isset($definitions[$reftable]['manyToOne'])) {
-	                    $definitions[$reftable]['manyToOne'] = [];
+	                if (!isset($definitions[$manytable]['manyToOne'])) {
+	                    $definitions[$manytable]['manyToOne'] = [];
 	                }
-	                $definitions[$reftable]['manyToOne'][$manyToOneName] = $mto;
+	                $definitions[$manytable]['manyToOne'][$manyToOneName] = $mto;
             	}
             }
         }
+
 
         foreach ($definitions as $tablename => $definition) {
             // Write YAML mapping file
@@ -178,6 +164,7 @@ class Generator {
             fputs($out, $mapping);
             fclose($out);
         }
+
 
         // Generate metadata from YAML
         $driver = new YamlDriver([$this->mappingsdir]);
@@ -303,22 +290,18 @@ class Generator {
     }
 
     /**
-     * Calculate the name for a oneToMany / manyToOne join.
+     * If the fieldname ends with id (or _id), strip this off.
      *
-     * This will normally be simply the name of the ref table, but where
-     * there is more than one link between the same table and ref table,
-     * the ref field will be appended to distinguish.
-     *
-     * @param string $table
-     * @param string $reftable
-     * @param array $joins
+     * @param string $fieldname
+     * @return string fieldname with id stripped
      */
-    public function joinName($table, $reftable, $reffield, $joins) {
-		if ($joins[$table][$reftable] == 1) {
-			return $reftable;
-		} else {
-			return $reftable . '_where_' . $reffield;
-		}
+    public static function stripIdFromEnd($fieldname) {
+    	$pattern = '/_?id$/';
+    	if (preg_match($pattern, $fieldname)) {
+    		return preg_replace($pattern, '', $fieldname);
+    	} else {
+    		return $fieldname;
+    	}
     }
 
 }
