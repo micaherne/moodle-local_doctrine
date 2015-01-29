@@ -126,40 +126,48 @@ class Generator {
 
         foreach ($joins as $table => $data) {
             foreach ($data as $reftable => $keys) {
-                // TODO: Support composite keys?
-                $refField = implode('', $key->getRefFields());
-                $field = implode('', $key->getFields());
-                if (count($keys) == 1) {
-                    $manyToOneName = $table;
-                    $oneToManyName = $reftable;
-                } else {
-                    $manyToOneName = "{$table}_as_{$field}";
-                    $oneToManyName = "{$reftable}_as_{$refField}";
-                }
 
-                $otm = [
-                    'targetEntity' => self::classnameForTable($reftable),
-                    'mappedBy' => $refField
-                ];
+            	if ($table === $reftable) {
+            		// TODO: Support self-referential joins
+            		continue;
+            	}
 
-                if (!isset($definitions[$table]['oneToMany'])) {
-                    $definitions[$table]['oneToMany'] = [];
-                }
-                $definitions[$table]['oneToMany'][$oneToManyName] = $otm;
+            	foreach ($keys as $key) {
+	                // TODO: Support composite keys?
+	                $refField = implode('', $key->getRefFields());
+	                $field = implode('', $key->getFields());
+	                if (count($keys) == 1) {
+	                    $manyToOneName = $table;
+	                    $oneToManyName = $reftable;
+	                } else {
+	                    $manyToOneName = "{$table}_as_" . preg_replace('/_?id$/', '', $field);
+	                    $oneToManyName = "{$reftable}_as_" . preg_replace('/_?id$/', '', $refField);
+	                }
 
-                $mto = [
-                    'targetEntity' => self::classnameForTable($table),
-                    'inversedBy' => $oneToManyName,
-                    'joinColumn' => [
-                        'name' => $field,
-                        'referencedColumnId' => $refField
-                    ]
-                ];
+	                $otm = [
+	                    'targetEntity' => self::classnameForTable($reftable),
+	                    'mappedBy' => $field
+	                ];
 
-                if (!isset($definitions[$reftable]['manyToOne'])) {
-                    $definitions[$reftable]['manyToOne'] = [];
-                }
-                $definitions[$reftable]['manyToOne'][$manyToOneName] = $mto;
+	                if (!isset($definitions[$table]['oneToMany'])) {
+	                    $definitions[$table]['oneToMany'] = [];
+	                }
+	                $definitions[$table]['oneToMany'][$oneToManyName] = $otm;
+
+	                $mto = [
+	                    'targetEntity' => self::classnameForTable($table),
+	                    'inversedBy' => $oneToManyName,
+	                    'joinColumn' => [
+	                        'name' => $refField,
+	                        'referencedColumnId' => $field
+	                    ]
+	                ];
+
+	                if (!isset($definitions[$reftable]['manyToOne'])) {
+	                    $definitions[$reftable]['manyToOne'] = [];
+	                }
+	                $definitions[$reftable]['manyToOne'][$manyToOneName] = $mto;
+            	}
             }
         }
 
