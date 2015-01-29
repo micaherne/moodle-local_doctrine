@@ -29,8 +29,7 @@ class Generator {
         $schema = $dbman->get_install_xml_schema();
 
         $definitions = [];
-        $onetomanys = [];
-        $joinedtables = []; // tables with >1 foreign key link to another
+        $joins = []; // tables with foreign key link to another
         foreach ($schema->getTables() as $table) {
             $tablename = $table->getName();
 
@@ -55,9 +54,12 @@ class Generator {
                      * manyToOne and oneToMany correctly
                      */
                     if (!isset($joins[$tablename]) || !isset($joins[$tablename][$reftable])) {
-                    	$joins[$tablename] = [$reftable => 0];
+                    	$joins[$tablename] = [$reftable => [$key]];
+                    } else {
+                        $joins[$tablename][$reftable][] = $key;
                     }
-                    $joins[$tablename][$reftable]++ ;
+
+                    // Can't add manyToOnes here as we won't know the inversedBy name yet
 
                     // Add a many to one
                     /* if (!isset($definitions[$table->getName()]['manyToOne'])) {
@@ -72,12 +74,6 @@ class Generator {
                     	]
                     ]; */
 
-                    // Take a note of inverse relationships to be added later
-                    if (!isset($onetomanys[$reftable])) {
-                        $onetomanys[$reftable] = [];
-                    }
-
-                    $onetomanys[$reftable][$tablename] = $key;
 
                 }
             }
@@ -126,23 +122,45 @@ class Generator {
 
             $definitions[$table->getName()]['fields'] = $fields;
 
-        }
+        } // end of first pass
 
-        // Add one-to-many relations
-        foreach ($onetomanys as $table => $details) {
-            $otm = [];
+        foreach ($joins as $table => $data) {
+            foreach ($data as $reftable => $keys) {
+                // TODO: Support composite keys?
+                $refField = implode('', $key->getRefFields());
+                $field = implode('', $key->getFields());
+                if (count($keys) == 1) {
+                    $manyToOneName = $table;
+                    $oneToManyName = $reftable;
+                } else {
+                    $manyToOneName = "{$table}_as_{$field}";
+                    $oneToManyName = "{$reftable}_as_{$refField}";
+                }
 
-            // Remember foreign key here has $table as $refTable etc.!!
-            foreach ($details as $tablename => $foreignkey) {
-            	$othertablefield = implode('', $foreignkey->getFields());
-            	$thistablefield = implode('', $foreignkey->getRefFields());
-            	$otm[$tablename] = [
-                        'targetEntity' => self::classnameForTable($tablename),
-                        // TODO: Support composite foreign keys?
-                        'mappedBy' => $othertablefield
+                $otm = [
+                    'targetEntity' => self::classnameForTable($reftable),
+                    'mappedBy' => $refField
                 ];
+
+                if (!isset($definitions[$table]['oneToMany'])) {
+                    $definitions[$table]['oneToMany'] = [];
+                }
+                $definitions[$table]['oneToMany'][$oneToManyName] = $otm;
+
+                $mto = [
+                    'targetEntity' => self::classnameForTable($table),
+                    'inversedBy' => $oneToManyName,
+                    'joinColumn' => [
+                        'name' => $field,
+                        'referencedColumnId' => $refField
+                    ]
+                ];
+
+                if (!isset($definitions[$reftable]['manyToOne'])) {
+                    $definitions[$reftable]['manyToOne'] = [];
+                }
+                $definitions[$reftable]['manyToOne'][$manyToOneName] = $mto;
             }
-            $definitions[$table]['oneToMany'] = $otm;
         }
 
         foreach ($definitions as $tablename => $definition) {
