@@ -10,6 +10,7 @@ use Doctrine\ORM\Tools\DisconnectedClassMetadataFactory;
 use Doctrine\ORM\Configuration;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Tools\EntityGenerator;
+use Doctrine\Common\Inflector\Inflector;
 
 class Generator {
 
@@ -53,7 +54,7 @@ class Generator {
                      * tables by more than one column so we can make sure we create
                      * manyToOne and oneToMany correctly
                      */
-                    if (!isset($fk[$tablename]) || !isset($fk[$tablename][$reftable])) {
+                    if (!isset($fk[$tablename]) && !isset($fk[$tablename][$reftable])) {
                     	$fk[$tablename] = [$reftable => [$key]];
                     } else {
                         $fk[$tablename][$reftable][] = $key;
@@ -122,11 +123,19 @@ class Generator {
 	                $manyfield = implode('', $key->getFields());
 
 	                if (count($keys) == 1) {
-	                    $oneToManyName = $manytable;
+	                    $oneToManyName = Inflector::pluralize($manytable);
 	                    $manyToOneName = $onetable;
 	                } else {
-	                    $oneToManyName = "{$manytable}_as_" . self::stripIdFromEnd($manyfield);
+	                    $oneToManyName = Inflector::pluralize($manytable) . "_as_" . self::stripIdFromEnd($manyfield);
 	                    $manyToOneName = "{$onetable}_as_" . self::stripIdFromEnd($manyfield);
+	                }
+
+	                // Stop doctrine croaking on join with same name as field
+	                if (isset($definitions[$onetable]['fields'][$oneToManyName])) {
+	                	$oneToManyName .= 'x'; // TODO: Must be something better than this!
+	                }
+	                if (isset($definitions[$manytable]['fields'][$manyToOneName])) {
+	                	$manyToOneName .= 'x'; // TODO: Must be something better than this!
 	                }
 
 	                $otm = [
@@ -156,7 +165,6 @@ class Generator {
             }
         }
 
-
         foreach ($definitions as $tablename => $definition) {
             // Write YAML mapping file
             $mapping = Yaml::dump([self::classnameForTable($tablename) => $definition], 6, 2);
@@ -164,7 +172,6 @@ class Generator {
             fputs($out, $mapping);
             fclose($out);
         }
-
 
         // Generate metadata from YAML
         $driver = new YamlDriver([$this->mappingsdir]);

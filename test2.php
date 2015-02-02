@@ -29,5 +29,7 @@ mtrace($user->getFirstname());
 $enrolments = $user->getUserEnrolmentsAsUser();
 
 foreach ($enrolments as $e) {
-	mtrace($e->getStatus());
+	$enrol = $e->getEnrol();
+	$course = $enrol->getCourse();
+	mtrace($course->getFullname());
 }
