@@ -32,4 +32,5 @@ foreach ($enrolments as $e) {
 	$enrol = $e->getEnrol();
 	$course = $enrol->getCourse();
 	mtrace($course->getFullname());
+	var_dump($course);
 }
