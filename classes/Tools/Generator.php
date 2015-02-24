@@ -11,17 +11,14 @@ use Doctrine\ORM\Configuration;
 use Doctrine\ORM\Mapping\ClassMetadata;
 use Doctrine\ORM\Tools\EntityGenerator;
 use Doctrine\Common\Inflector\Inflector;
+use Symfony\Component\Filesystem\Filesystem;
 
 class Generator {
 
     public $mappingsdir;
     const TARGET_NAMESPACE = 'local_doctrine\\Entity';
 
-    function __construct($mappingsdir = 'mappings') {
-        $this->mappingsdir = $mappingsdir;
-    }
-
-    function run() {
+    function generateMappings($pluginname, $mappingsdir) {
         global $CFG, $DB;
 
         $db = \moodle_database::get_driver_instance($CFG->dbtype, $CFG->dblibrary);
@@ -168,65 +165,87 @@ class Generator {
         foreach ($definitions as $tablename => $definition) {
             // Write YAML mapping file
             $mapping = Yaml::dump([self::classnameForTable($tablename) => $definition], 6, 2);
-            $out = fopen($this->mappingsdir . DIRECTORY_SEPARATOR . self::filenameForTable($tablename), "w");
+            $out = fopen($mappingsdir . DIRECTORY_SEPARATOR . self::filenameForTable($tablename), "w");
             fputs($out, $mapping);
             fclose($out);
         }
 
-        // Generate metadata from YAML
-        $driver = new YamlDriver([$this->mappingsdir]);
+    }
 
-        $metadatas = [];
-        $f = new DisconnectedClassMetadataFactory();
+    public function generateEntities($mappingsdir, $pluginname = 'core', $namespace = null, $extendclass = null) {
 
-        foreach ($driver->getAllClassNames() as $c) {
-            $metadata = new ClassMetadata($c);
-            $driver->loadMetadataForClass($c, $metadata);
-            $metadatas[] = $metadata;
-        }
+    	$plugindir = \core_component::get_component_directory($pluginname);
+    	if ($pluginname == 'core') {
+    		$plugindir = \core_component::get_component_directory('local_doctrine');
+    	}
 
-        $destpath = __DIR__ . '/../temp';
-        $extend = null; // UNUSED: class to extend
+		// TODO: Calculate classes dir from namespace
+    	$classesdir = $plugindir . DIRECTORY_SEPARATOR . 'classes/Entity';
+
+    	// Generate metadata from YAML
+    	$driver = new YamlDriver([$mappingsdir]);
+
+    	$metadatas = [];
+    	$f = new DisconnectedClassMetadataFactory();
+
+    	foreach ($driver->getAllClassNames() as $c) {
+    		$metadata = new ClassMetadata($c);
+    		$driver->loadMetadataForClass($c, $metadata);
+    		$metadatas[] = $metadata;
+    	}
+
+    	// Generate entity classes
+    	if (count($metadatas)) {
+    		// Create EntityGenerator
+    		$entityGenerator = new EntityGenerator();
+
+    		$entityGenerator->setGenerateAnnotations(true);
+    		$entityGenerator->setGenerateStubMethods(true);
+    		$entityGenerator->setRegenerateEntityIfExists(true);
+    		$entityGenerator->setUpdateEntityIfExists(true);
+    		$entityGenerator->setNumSpaces(4);
+
+    		if ($extendclass !== null) {
+    			$entityGenerator->setClassToExtend($extendclass);
+    		}
+
+    		foreach ($metadatas as $metadata) {
+    			mtrace(
+    			sprintf('Processing entity "<info>%s</info>"', $metadata->name)
+    			);
+    		}
 
 
-        // Generate entity classes
-        if (count($metadatas)) {
-            // Create EntityGenerator
-            $entityGenerator = new EntityGenerator();
+    		$destpath = $this->create_temp_dir();
 
-            $entityGenerator->setGenerateAnnotations(true);
-            $entityGenerator->setGenerateStubMethods(true);
-            $entityGenerator->setRegenerateEntityIfExists(true);
-            $entityGenerator->setUpdateEntityIfExists(true);
-            $entityGenerator->setNumSpaces(4);
+    		// Generating Entities
+    		$entityGenerator->generate($metadatas, $destpath);
 
-            if ($extend !== null) {
-                $entityGenerator->setClassToExtend($extend);
-            }
+    		// Outputting information message
+    		mtrace(PHP_EOL . sprintf('Entity classes generated to "<info>%s</INFO>"', $destpath));
+    	} else {
+    		mtrace('No Metadata Classes to process.');
+    	}
 
-            foreach ($metadatas as $metadata) {
-                mtrace(
-                sprintf('Processing entity "<info>%s</info>"', $metadata->name)
-                );
-            }
+    	// Move to classes folder for autoloading
+    	if (file_exists($classesdir)) {
+    		rmdir($classesdir);
+    	}
 
-            // Generating Entities
-            $entityGenerator->generate($metadatas, $destpath);
 
-            // Outputting information message
-            mtrace(PHP_EOL . sprintf('Entity classes generated to "<info>%s</INFO>"', $destpath));
-        } else {
-            mtrace('No Metadata Classes to process.');
-        }
+    	rename($destpath . '/local_doctrine/Entity', $classesdir);
+    	rmdir($destpath . '/local_doctrine');
+    	rmdir($destpath);
+    }
 
-        // Move to classes folder for autoloading
-        $classesdir = $CFG->dirroot.'/local/doctrine/classes/Entity';
-        if (file_exists($classesdir)) {
-            rmdir($classesdir);
-        }
-        rename($destpath . '/local_doctrine/Entity', $classesdir);
-        rmdir($destpath . '/local_doctrine');
-        rmdir($destpath);
+    public function create_temp_dir() {
+    	$fs = new Filesystem();
+
+    	$dir = tempnam(sys_get_temp_dir(), 'doc');
+    	$fs->remove($dir);
+    	$fs->mkdir($dir);
+
+    	return $dir;
     }
 
     function field_definition(\xmldb_field $field) {
