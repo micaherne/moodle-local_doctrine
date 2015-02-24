@@ -24,7 +24,12 @@ class Generator {
         $db = \moodle_database::get_driver_instance($CFG->dbtype, $CFG->dblibrary);
         $dbman = $db->get_manager();
 
-        $schema = $dbman->get_install_xml_schema();
+        if ($pluginname == 'core') {
+        	$schema = $dbman->get_install_xml_schema();
+        } else {
+			$schema = $this->get_plugin_schema($pluginname);
+        }
+
 
         $definitions = [];
         $fk = []; // tables with foreign key link to another $fk[many table][one table][fk]
@@ -179,8 +184,19 @@ class Generator {
     		$plugindir = \core_component::get_component_directory('local_doctrine');
     	}
 
-		// TODO: Calculate classes dir from namespace
     	$classesdir = $plugindir . DIRECTORY_SEPARATOR . 'classes/Entity';
+		if (!is_null($namespace)) {
+    		if (strpos($namespace, '\\') === 0) {
+    			$namespace = substr($namespace, 1);
+    		}
+    		$namespaceparts = explode('\\', $namespace);
+    		$plugin = array_shift($namespaceparts);
+    		$nsplugindir = \core_component::get_component_directory($plugin);
+    		if (is_null($nsplugindir)) {
+    			throw new Exception("Can't find plugin for namespace $namespace");
+    		}
+    		$classesdir = $nsplugindir . DIRECTORY_SEPARATOR . 'classes/' . implode('/', $namespaceparts);
+		}
 
     	// Generate metadata from YAML
     	$driver = new YamlDriver([$mappingsdir]);
@@ -232,10 +248,10 @@ class Generator {
     		rmdir($classesdir);
     	}
 
-
+		$fs = new Filesystem();
     	rename($destpath . '/local_doctrine/Entity', $classesdir);
-    	rmdir($destpath . '/local_doctrine');
-    	rmdir($destpath);
+    	$fs->remove($destpath . '/local_doctrine');
+    	$fs->remove($destpath);
     }
 
     public function create_temp_dir() {
@@ -328,6 +344,30 @@ class Generator {
     	} else {
     		return $fieldname;
     	}
+    }
+
+    public function get_plugin_schema($pluginname) {
+    	global $CFG;
+
+    	$plugindir = \core_component::get_component_directory($pluginname);
+    	if (is_null($plugindir)) {
+    		throw new Exception("Plugin not found: $pluginname");
+    	}
+    	$dbdir = $plugindir . '/db';
+    	$xmldb_file = new \xmldb_file($dbdir.'/install.xml');
+    	if (!$xmldb_file->fileExists() or !$xmldb_file->loadXMLStructure()) {
+    		throw new Exception("install.xml not found: $pluginname");
+    	}
+    	$schema = new \xmldb_structure('export');
+    	$schema->setVersion($CFG->version);
+    	$structure = $xmldb_file->getStructure();
+    	$tables = $structure->getTables();
+    	foreach ($tables as $table) {
+    		$table->setPrevious(null);
+    		$table->setNext(null);
+    		$schema->addTable($table);
+    	}
+    	return $schema;
     }
 
 }
